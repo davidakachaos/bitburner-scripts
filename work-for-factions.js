@@ -454,20 +454,32 @@ async function earnFactionInvite(ns, factionName) {
         } else if (gymByCity[player.city]) // Otherwise only go to free university if our city has a university
             canTrain = true;
         else
-            return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+            canTrain = false;
+            ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
                 `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for training, and your current ` +
                 `city ${player.city} does not have a gym to go workout.`);
         if (canTrain){
-            let workingout = false;
-            // Try to go to the gym
-            for (let i = 0; i < physicalStats.length; i++) {
-                const stat = physicalStats[i];
-                workingout = await workout(ns, false, stat)
-                if (workingout){
-                    workedForInvite = await monitorWorkout(ns, stat, requirement);
+            const em = requirement / options['training-stat-per-multi-threshold'];
+            // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time. TODO: Be smarter
+            if (deficientStats.map(s => s.stat).some(s => classHeuristic(s) < em)){
+                let workingout = false;
+                // Try to go to the gym
+                for (let i = 0; i < deficientStats.length; i++) {
+                    const stat = deficientStats[i];
+                    workingout = await workout(ns, false, stat)
+                    if (workingout){
+                        workedForInvite = await monitorWorkout(ns, stat, requirement);
+                    }
                 }
+                return ns.print(`${reasonPrefix} Done with training at the gym to level all stats needed`);
+            } else {
+                ns.print("Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. " +
+                `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
+                `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
+                    `${formatNumberShort(player[`${s}_mult`])}*${formatNumberShort(player[`${s}_exp_mult`])}*` +
+                    `${formatNumberShort(bitnodeMultipliers[`${title(s)}LevelMultiplier`])}*` +
+                    `${formatNumberShort(bitnodeMultipliers.CrimeExpGain)})=${formatNumberShort(crimeHeuristic(s))}`).join(", "));
             }
-            return ns.print(`${reasonPrefix} Done with training at the gym to level all stats needed`);
         }
     }
     // If the gym failed, or not allowed, then do crime as normal
