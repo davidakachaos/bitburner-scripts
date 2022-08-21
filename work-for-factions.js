@@ -448,38 +448,36 @@ async function earnFactionInvite(ns, factionName) {
     // Before we do crime, if we need only physical stats, go to the gym for them?
     if(doCrime && allowGym){
         let canTrain = false;
-        if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
+        if (deficientStats.length > 3){
+            ns.print(`All physical are needed, probably better to do crime.`);
+            canTrain = false;
+        } else if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
             if (player.city != "Volhaven") await goToCity(ns, "Volhaven");
             canTrain = true;
         } else if (gymByCity[player.city]) // Otherwise only go to free university if our city has a university
             canTrain = true;
-        else
-            canTrain = false;
-            ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
-                `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for training, and your current ` +
-                `city ${player.city} does not have a gym to go workout.`);
         if (canTrain){
-            const em = requirement / options['training-stat-per-multi-threshold'];
-            // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time. TODO: Be smarter
-            if (deficientStats.map(s => s.stat).some(s => classHeuristic(s) < em)){
-                let workingout = false;
-                // Try to go to the gym
-                for (let i = 0; i < deficientStats.length; i++) {
-                    const stat = deficientStats[i];
-                    workingout = await workout(ns, false, stat)
-                    if (workingout){
-                        workedForInvite = await monitorWorkout(ns, stat, requirement);
-                    }
+            // const em = requirement / options['training-stat-per-multi-threshold'];
+            // // Hack: Create a rough heuristic suggesting how much multi we need to train physical stats in a reasonable amount of time. TODO: Be smarter
+            // if (deficientStats.map(s => s.stat).some(s => classHeuristic(s) < em)){
+            let workingout = false;
+            // Try to go to the gym
+            for (let i = 0; i < deficientStats.length; i++) {
+                const stat = deficientStats[i].stat;
+                workingout = await workout(ns, shouldFocusAtWork, stat)
+                if (workingout){
+                    workedForInvite = await monitorWorkout(ns, stat, requirement);
                 }
-                return ns.print(`${reasonPrefix} Done with training at the gym to level all stats needed`);
-            } else {
-                ns.print("Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. " +
-                `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
-                `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
-                    `${formatNumberShort(player[`${s}_mult`])}*${formatNumberShort(player[`${s}_exp_mult`])}*` +
-                    `${formatNumberShort(bitnodeMultipliers[`${title(s)}LevelMultiplier`])}*` +
-                    `${formatNumberShort(bitnodeMultipliers.CrimeExpGain)})=${formatNumberShort(crimeHeuristic(s))}`).join(", "));
             }
+            return ns.print(`Done with training at the gym to level all stats needed`);
+            // } else {
+            //     ns.print("Some mults * exp_mults * bitnode mults appear to be too low to increase stats in a reasonable amount of time. " +
+            //     `You can control this with --training-stat-per-multi-threshold. Current sqrt(mult*exp_mult*bn_mult*bn_exp_mult) ` +
+            //     `should be ~${formatNumberShort(em, 2)}, have ` + deficientStats.map(s => s.stat).map(s => `${s.slice(0, 3)}: sqrt(` +
+            //         `${formatNumberShort(player[`${s}_mult`])}*${formatNumberShort(player[`${s}_exp_mult`])}*` +
+            //         `${formatNumberShort(bitnodeMultipliers[`${title(s)}LevelMultiplier`])}*` +
+            //         `${formatNumberShort(bitnodeMultipliers.CrimeExpGain)})=${formatNumberShort(crimeHeuristic(s))}`).join(", "));
+            // }
         }
     }
     // If the gym failed, or not allowed, then do crime as normal
@@ -609,6 +607,8 @@ export async function crimeForKillsKarmaStats(ns, reqKills, reqKarma, reqStats, 
     while (forever || (needStats = anyStatsDeficient()) || player.numPeopleKilled < reqKills || -ns.heart.break() < reqKarma) {
         if (!forever && breakToMainLoop()) return ns.print('INFO: Interrupting crime to check on high-level priorities.');
         let crimeChances = await getNsDataThroughFile(ns, `Object.fromEntries(ns.args.map(c => [c, ns.singularity.getCrimeChance(c)]))`, '/Temp/crime-chances.txt', bestCrimesByDifficulty);
+        let needStats = player.strength < reqStats || player.defense < reqStats || player.dexterity < reqStats || player.agility < reqStats;
+        let needAllStats = player.strength < reqStats && player.defense < reqStats && player.dexterity < reqStats && player.agility < reqStats
         let karma = -ns.heart.break();
         crime = crimeCount < 10 ? (crimeChances["homicide"] > 0.75 ? "homicide" : "mug") : // Start with a few fast & easy crimes to boost stats if we're just starting
             (!needStats && (player.numPeopleKilled < reqKills || karma < reqKarma)) ? "homicide" : // If *all* we need now is kills or Karma, homicide is the fastest way to do that, even at low proababilities
@@ -624,6 +624,19 @@ export async function crimeForKillsKarmaStats(ns, reqKills, reqKarma, reqStats, 
         while ((player = (await getPlayerInfo(ns))).crimeType == `commit ${crime}` || player.crimeType == crime) // If we woke up too early, wait a little longer for the crime to finish
             await ns.sleep(10);
         crimeCount++;
+        // check if we should be training instead
+        if(reqKills <= player.numPeopleKilled && karma > reqKarma && needStats && !needAllStats){
+            // We dont need kills or karma, just some stats!
+            const physicalStats = ["strength", "defense", "dexterity", "agility"];
+            let deficientStats = !requirement ? [] : physicalStats.map(stat => ({ stat, value: player[stat] })).filter(stat => stat.value < reqStats);
+            for (let i = 0; i < deficientStats.length; i++) {
+                const stat = deficientStats[i].stat;
+                workingout = await workout(ns, shouldFocusAtWork, stat)
+                if (workingout){
+                    waiting_for_workingout = await monitorWorkout(ns, stat, reqStats);
+                }
+            }
+        }
     }
     ns.print(`Done committing crimes. Reached ${strRequirements.map(r => r()).join(', ')}`);
     return true;
@@ -716,6 +729,16 @@ async function monitorWorkout(ns, stat, requirement) {
         if ((Date.now() - lastStatusUpdateTime) > statusUpdateInterval) {
             lastStatusUpdateTime = Date.now();
             announce(ns, `Working out until ${stat} reaches ${requirement}. Currently at ${player[stat]}...`)
+            if (requirement - player[stat] > 10) { // Try to spend hacknet-node hashes on university upgrades while we've got a ways to study to make it go faster
+                let spentHashes = await trySpendHashes(ns, "Improve Gym Training");
+                if (spentHashes > 0) {
+                    announce(ns, 'Bought a "Improve Gym Training" upgrade.', 'success');
+                    let training =  await workout(ns, shouldFocusAtWork, stat);
+                    if (training){
+                        ns.print(`Restarted gym training after upgrade`)
+                    }
+                }
+            }
         }
         await ns.sleep(loopSleepInterval);
     }
