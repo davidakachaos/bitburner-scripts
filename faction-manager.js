@@ -15,7 +15,7 @@ const potentialGangFactions = ["Slum Snakes", "Tetrads", "The Black Hand", "The 
 const default_hidden_stats = ['bladeburner', 'hacknet']; // Hide from the summary table by default because they clearly all come from one faction.
 const output_file = "/Temp/affordable-augs.txt";
 const staneksGift = "Stanek's Gift - Genesis";
-const factionsWithoutDonation = ["Bladeburners", "Church of the Machine God"]; // Not allowed to donate to these factions for rep
+const factionsWithoutDonation = ["Bladeburners", "Church of the Machine God", "Shadows of Anarchy"]; // Not allowed to donate to these factions for rep
 
 // Factors used in calculations
 const nfCountMult = 1.14; // Factors that control how neuroflux prices scale
@@ -288,7 +288,8 @@ async function updateAugmentationData(ns, desiredAugs) {
         stats: Object.fromEntries(Object.entries(dictAugStats[aug]).filter(([k,v]) => v != 1)),
         prereqs: dictAugPrereqs[aug] || [],
         // The best augmentations either have no stats (special effect like no Focus penalty, or Red Pill), or stats in the 'stat-desired' command line options
-        desired: desiredAugs.includes(aug) || Object.keys(dictAugStats[aug]).length == 0 ||
+        // The above is NOT true for the Shadows of Anarchy. Only the phyzical WKS harmonizer is desired
+        desired: desiredAugs.includes(aug) || Object.keys(dictAugStats[aug]).length == 0 && !aug.includes('SoA') || aug == 'SoA - phyzical WKS harmonizer' ||
             Object.keys(dictAugStats[aug]).some(key => desiredStatsFilters.some(filter => key.includes(filter))),
         // Get the name of the "most-early-game" faction from which we can buy this augmentation. Estimate this by cost of the most expensive aug the offer
         getFromAny: factionNames.map(f => factionData[f]).sort((a, b) => a.mostExpensiveAugCost - b.mostExpensiveAugCost)
