@@ -399,13 +399,16 @@ async function earnFactionInvite(ns, factionName) {
     let workedForInvite = false;
     // If committing crimes can help us join a faction - we know how to do that
     let doCrime = false;
+    let allowGym = true;
     if ((requirement = requiredKarmaByFaction[factionName]) && -ns.heart.break() < requirement) {
         ns.print(`${reasonPrefix} you have insufficient Karma. Need: ${-requirement}, Have: ${ns.heart.break()}`);
         doCrime = true;
+        allowGym = false;
     }
     if ((requirement = requiredKillsByFaction[factionName]) && player.numPeopleKilled < requirement) {
         ns.print(`${reasonPrefix} you have insufficient kills. Need: ${requirement}, Have: ${player.numPeopleKilled}`);
         doCrime = true;
+        allowGym = false;
     }
     // Check on physical stat requirements
     const physicalStats = ["strength", "defense", "dexterity", "agility"];
@@ -442,7 +445,33 @@ async function earnFactionInvite(ns, factionName) {
     }
     if (doCrime && options['no-crime'])
         return ns.print(`${reasonPrefix} Doing crime to meet faction requirements is disabled. (--no-crime or --no-focus)`);
-    if (doCrime)
+    // Before we do crime, if we need only physical stats, go to the gym for them?
+    if(doCrime && allowGym){
+        let canTrain = false;
+        if (player.money > options['pay-for-studies-threshold']) { // If we have sufficient money, pay for the best studies
+            if (player.city != "Volhaven") await goToCity(ns, "Volhaven");
+            canTrain = true;
+        } else if (gymByCity[player.city]) // Otherwise only go to free university if our city has a university
+            canTrain = true;
+        else
+            return ns.print(`You have insufficient money (${formatMoney(player.money)} < --pay-for-studies-threshold ` +
+                `${formatMoney(options['pay-for-studies-threshold'])}) to travel or pay for training, and your current ` +
+                `city ${player.city} does not have a gym to go workout.`);
+        if (canTrain){
+            let workingout = false;
+            // Try to go to the gym
+            for (let i = 0; i < physicalStats.length; i++) {
+                const stat = physicalStats[i];
+                workingout = await workout(ns, false, stat)
+                if (workingout){
+                    workedForInvite = await monitorWorkout(ns, stat, requirement);
+                }
+            }
+            return ns.print(`${reasonPrefix} Done with training at the gym to level all stats needed`);
+        }
+    }
+    // If the gym failed, or not allowed, then do crime as normal
+    if (!workedForInvite && doCrime)
         workedForInvite = await crimeForKillsKarmaStats(ns, requiredKillsByFaction[factionName] || 0, requiredKarmaByFaction[factionName] || 0, requiredCombatByFaction[factionName] || 0);
 
     // Study for hack levels if that's what's keeping us
@@ -634,6 +663,52 @@ async function monitorStudies(ns, stat, requirement) {
         await ns.sleep(loopSleepInterval);
     }
 }
+
+
+// ----------------------------------------------------------------
+// Gym functions
+// ----------------------------------------------------------------
+const gymByCity = Object.fromEntries([["Aevum", "Crush Fitness Gym"], ["Sector-12", "Powerhouse Gym"], ["Volhaven", "Millenium Fitness Gym"]]);
+
+/** @param {NS} ns */
+async function workout(ns, focus, stat, gym = null) {
+    if (options['no-workout'])
+        return announce(ns, `WARNING: Could not workout '${stat}' because --no-workout is set.`, 'warning');
+    const playerCity = (await getPlayerInfo(ns)).city;
+    if (!gym) { // Auto-detect the university in our city
+        gym = gymByCity[playerCity];
+        if (!gym)
+            return announce(ns, `WARNING: Could not workout on '${stat}' because we are in city '${playerCity}' without a gym.`, 'warning');
+    }
+    if (await getNsDataThroughFile(ns, `ns.singularity.gymWorkout(ns.args[0], ns.args[1], ns.args[2])`, '/Temp/workout.txt', [gym, stat, focus])) {
+        lastActionRestart = Date.now();
+        announce(ns, `Started working out on '${stat}' at '${gym}`, 'success');
+        return true;
+    }
+    announce(ns, `ERROR: For some reason, failed to workout on '${stat}' at gym '${gym}' (Not in correct city? Player is in '${playerCity}')`, 'error');
+    return false;
+}
+
+/** @param {NS} ns
+ * Helper to wait for workout to be complete */
+async function monitorWorkout(ns, stat, requirement) {
+    let lastStatusUpdateTime = 0;
+    while (!breakToMainLoop()) {
+        const player = await getPlayerInfo(ns);
+        if (!player.className)
+            return announce(ns, 'WARNING: Somebody interrupted our workout.', 'warning');
+        if (player[stat] >= requirement) {
+            announce(ns, `SUCCESS: Achieved ${stat} level ${player[stat]} >= ${requirement} while working out`);
+            return true;
+        }
+        if ((Date.now() - lastStatusUpdateTime) > statusUpdateInterval) {
+            lastStatusUpdateTime = Date.now();
+            announce(ns, `Working out until ${stat} reaches ${requirement}. Currently at ${player[stat]}...`)
+        }
+        await ns.sleep(loopSleepInterval);
+    }
+}
+
 
 /** @param {NS} ns */
 export async function waitForFactionInvite(ns, factionName, maxWaitTime = waitForFactionInviteTime) {
